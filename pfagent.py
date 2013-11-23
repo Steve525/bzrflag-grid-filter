@@ -61,7 +61,7 @@ class Agent(object):
         self.truehit = 0.97
         self.falsepositive = 0.9
         self.max_dist_to_obstacle = 90
-        self.belief_threshold = 0.80
+        self.belief_threshold = 0.95
         
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -83,8 +83,9 @@ class Agent(object):
         # of making their PD controllers nearly useless!
         tank = mytanks[0]
         self.do_move(tank)
-        #tank = mytanks[1]
-        #self.do_move(tank)
+        self.do_update_beliefs(tank)
+        tank = mytanks[1]
+        self.do_move(tank)
         self.do_update_beliefs(tank)
         results = self.bzrc.do_commands(self.commands)
 
@@ -110,24 +111,26 @@ class Agent(object):
         '''
         # Update beliefs
         for x in range(0, x_size):
+            bx = 400 + x + pos[0]
             for y in range(0, y_size):
-                bx = x + pos[0]
-                by = y + pos[1]
+                by = 400 + y + pos[1]
                 if grid[x][y] == 1:
-                    bel_occ = self.truehit * self.belief[bx][by]
-                    bel_unocc = self.falsepositive * (1-self.belief[bx][by])
-                    self.belief[bx][by] = bel_occ / (bel_occ + bel_unocc)
+                    bel_occ = self.truehit * self.belief[by][bx]
+                    bel_unocc = self.falsepositive * (1-self.belief[by][bx])
+                    self.belief[by][bx] = bel_occ / (bel_occ + bel_unocc)
                 else:
-                    bel_occ = (1 - self.truehit) * self.belief[bx][by]
-                    bel_unocc = (1 - self.falsepositive) * (1-self.belief[bx][by])
-                    self.belief[bx][by] = bel_occ / (bel_occ + bel_unocc)
-                if self.belief[bx][by] > self.belief_threshold:
-                    self.belief[bx][by] = 1
+                    bel_occ = (1 - self.truehit) * self.belief[by][bx]
+                    bel_unocc = (1 - self.falsepositive) * (1-self.belief[by][bx])
+                    self.belief[by][bx] = bel_occ / (bel_occ + bel_unocc)
+                if self.belief[by][bx] > self.belief_threshold:
+                    self.belief[by][bx] = 1
        
-        for y in range(y_size,0,-1):
-            for x in range(0,x_size):
-                bx = x + pos[0]
-                by = y + pos[1]
+        #for y in range(y_size,0,-1):
+            #for x in range(0,x_size):
+                #bx = 400 + x + pos[0]
+                #by = 400 + y + pos[1]
+                #print bx, by, pos[0], pos[1]
+                '''
                 if self.belief[bx][by] == 1.0:
                     sys.stdout.write('#'); #{0:.1f} '.format(float(self.belief[bx][by])))
                 elif self.belief[bx][by] > 0.9:
@@ -150,11 +153,12 @@ class Agent(object):
                     sys.stdout.write('1')
                 else:
                     sys.stdout.write('-')
+                '''
                 #print '|'
                 #print self.belief[x + pos[0]][y + pos[1]]
-            sys.stdout.write('|\n')
+            #sys.stdout.write('|\n')
         #print '\n'
-        print '================================================'
+        #print '================================================'
         self.update_grid(self.belief)
 
     def do_move(self, tank):
