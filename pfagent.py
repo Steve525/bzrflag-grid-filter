@@ -22,6 +22,12 @@ import time
 import numpy
 from numpy import ones
 import random
+import OpenGL
+OpenGL.ERROR_CHECKING = False
+from OpenGL.GL import *
+from OpenGL.GLUT import *
+from OpenGL.GLU import *
+from numpy import zeros
 
 from bzrc import BZRC, Command
 
@@ -50,11 +56,12 @@ class Agent(object):
         self.k_ds = 1 # speed proportional derivative control constant
         # Belief grid
         self.prior = 0.75
-        self.belief = self.prior * numpy.ones((50, 50))
+        worldsize = int(self.constants['worldsize'])
+        self.belief = self.prior * numpy.ones((worldsize, worldsize))
         self.truehit = 0.97
         self.falsepositive = 0.9
         self.max_dist_to_obstacle = 90
-        self.belief_threshold = 0.99
+        self.belief_threshold = 0.80
         
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -75,8 +82,8 @@ class Agent(object):
         # IMPORTANT: Using lots of tanks will slow them down to the point
         # of making their PD controllers nearly useless!
         tank = mytanks[0]
-        #self.do_move(tank)
-        tank = mytanks[1]
+        self.do_move(tank)
+        #tank = mytanks[1]
         #self.do_move(tank)
         self.do_update_beliefs(tank)
         results = self.bzrc.do_commands(self.commands)
@@ -84,8 +91,12 @@ class Agent(object):
     def do_update_beliefs(self, tank):
         pos, grid = self.bzrc.get_occgrid(tank.index)
         # Apply noise to the grid
-        for x in range(0, 50):
-            for y in range(0, 50):
+        
+        x_size = len(grid) - 1
+        y_size = len(grid[0]) - 1
+        '''
+        for x in range(0, x_size):
+            for y in range(0, y_size):
                 if grid[x][y] == 1:
                     if random.random() > self.truehit:
                         grid[x][y] = 1
@@ -96,28 +107,56 @@ class Agent(object):
                         grid[x][y] = 1
                     else:
                         grid[x][y] = 0
+        '''
         # Update beliefs
-        for x in range(0, 50):
-            for y in range(0, 50):
+        for x in range(0, x_size):
+            for y in range(0, y_size):
+                bx = x + pos[0]
+                by = y + pos[1]
                 if grid[x][y] == 1:
-                    bel_occ = self.truehit * self.belief[x][y]
-                    bel_unocc = self.falsepositive * (1-self.belief[x][y])
-                    self.belief[x][y] = bel_occ / (bel_occ + bel_unocc)
+                    bel_occ = self.truehit * self.belief[bx][by]
+                    bel_unocc = self.falsepositive * (1-self.belief[bx][by])
+                    self.belief[bx][by] = bel_occ / (bel_occ + bel_unocc)
                 else:
-                    bel_occ = (1 - self.truehit) * self.belief[x][y]
-                    bel_unocc = (1 - self.falsepositive) * (1-self.belief[x][y])
-                    self.belief[x][y] = bel_occ / (bel_occ + bel_unocc)
-                if self.belief[x][y] > self.belief_threshold:
-                    self.belief[x][y] = 1
-        """for x in range(0,50):
-            for y in range(0,50):
-                if self.belief[x][y] == 1:
-                    print '1'
+                    bel_occ = (1 - self.truehit) * self.belief[bx][by]
+                    bel_unocc = (1 - self.falsepositive) * (1-self.belief[bx][by])
+                    self.belief[bx][by] = bel_occ / (bel_occ + bel_unocc)
+                if self.belief[bx][by] > self.belief_threshold:
+                    self.belief[bx][by] = 1
+       
+        for y in range(y_size,0,-1):
+            for x in range(0,x_size):
+                bx = x + pos[0]
+                by = y + pos[1]
+                if self.belief[bx][by] == 1.0:
+                    sys.stdout.write('#'); #{0:.1f} '.format(float(self.belief[bx][by])))
+                elif self.belief[bx][by] > 0.9:
+                    sys.stdout.write('9');
+                elif self.belief[bx][by] > 0.8:
+                    sys.stdout.write('8');
+                elif self.belief[bx][by] > 0.7:
+                    sys.stdout.write('7');
+                elif self.belief[bx][by] > 0.6:
+                    sys.stdout.write('6');
+                elif self.belief[bx][by] > 0.5:
+                    sys.stdout.write('5');
+                elif self.belief[bx][by] > 0.4:
+                    sys.stdout.write('4');
+                elif self.belief[bx][by] > 0.3:
+                    sys.stdout.write('3');
+                elif self.belief[bx][by] > 0.2:
+                    sys.stdout.write('2')
+                elif self.belief[bx][by] > 0.1:
+                    sys.stdout.write('1')
                 else:
-                    print ' '
-            print '\n'
-        print '\n'"""
-'''
+                    sys.stdout.write('-')
+                #print '|'
+                #print self.belief[x + pos[0]][y + pos[1]]
+            sys.stdout.write('|\n')
+        #print '\n'
+        print '================================================'
+        self.update_grid(self.belief)
+
     def do_move(self, tank):
         """Compute and follow the potential field vector"""
         print(self.get_potential_field_vector(tank))
@@ -181,7 +220,7 @@ class Agent(object):
             delta_x += attractive_force * dist * math.cos(angle) / self.max_dist_to_obstacle
             delta_y += attractive_force * dist * math.sin(angle) / self.max_dist_to_obstacle
         print("Attractive force: ", math.sqrt(delta_x**2 + delta_y**2))
-    
+        '''    
         # Repulsive fields
         repulsive_force = 25
         relative_corner_influence = 0.75
@@ -231,7 +270,7 @@ class Agent(object):
             if dist < self.max_dist_to_obstacle:
                 delta_x += -tangential_force * math.cos(angle)
                 delta_y += -tangential_force * math.sin(angle)
-        
+        '''     
         # Compute final vector
         v = min(math.sqrt(delta_x**2 + delta_y**2), float(self.constants['tankspeed']))
         theta = math.atan2(delta_y, delta_x)
@@ -307,7 +346,38 @@ class Agent(object):
         else:
             return closest_flag
      #########################################################
-'''
+
+    def draw_grid(self):
+        # This assumes you are using a numpy array for your grid
+        width, height = grid.shape
+        glRasterPos2f(-1, -1)
+        glDrawPixels(width, height, GL_LUMINANCE, GL_FLOAT, grid)
+        glFlush()
+        glutSwapBuffers()
+        glutPostRedisplay()
+
+    def update_grid(self, new_grid):
+        global grid
+        grid = new_grid
+
+
+
+    def init_window(self, width, height):
+        global window
+        global grid
+        grid = zeros((width, height))
+        glutInit(())
+        glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_ALPHA | GLUT_DEPTH)
+        glutInitWindowSize(width, height)
+        glutInitWindowPosition(0, 0)
+        window = glutCreateWindow("Grid filter")
+        glutDisplayFunc(self.draw_grid)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+        #glutMainLoop()
+
 def main():
     # Process CLI arguments.
     try:
@@ -323,14 +393,15 @@ def main():
     bzrc = BZRC(host, int(port))
 
     agent = Agent(bzrc)
-    
-    prev_time = time.time()
 
+    prev_time = time.time()
+    agent.init_window(int(800),int(800))
     # Run the agent
     try:
         while True:
             time_diff = time.time() - prev_time
             agent.tick(time_diff)
+            glutMainLoopEvent()
     except KeyboardInterrupt:
         print "Exiting due to keyboard interrupt."
         bzrc.close()
