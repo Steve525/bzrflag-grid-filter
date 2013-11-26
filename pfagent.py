@@ -56,12 +56,17 @@ class Agent(object):
         self.k_ds = 1 # speed proportional derivative control constant
         # Belief grid
         self.prior = 0.75
-        worldsize = int(self.constants['worldsize'])
-        self.belief = self.prior * numpy.ones((worldsize, worldsize))
+        self.worldsize = int(self.constants['worldsize'])
+        self.belief = self.prior * numpy.ones((self.worldsize, self.worldsize))
         self.truehit = 0.97
         self.falsepositive = 0.9
         self.max_dist_to_obstacle = 90
         self.belief_threshold = 0.95
+        
+        # Coarse grid of beliefs for efficiently exploring the map
+        self.coarse_size = 32
+        self.coarse_elements = 16 # Number of random samples to average within coarse grid block
+        self.coarse_grid = numpy.ones((self.coarse_size, self.coarse_size))
         
     def tick(self, time_diff):
         """Some time has passed; decide what to do next."""
@@ -81,15 +86,32 @@ class Agent(object):
         # Use only two tanks for demo
         # IMPORTANT: Using lots of tanks will slow them down to the point
         # of making their PD controllers nearly useless!
-        tank = mytanks[0]
-        self.do_move(tank)
-        self.do_update_beliefs(tank)
-        tank = mytanks[1]
-        self.do_move(tank)
-        self.do_update_beliefs(tank)
+        self.update_coarse_grid()
+        active_tank_count = len(mytanks)
+        for i in range(0, active_tank_count-1):
+            mytanks = self.bzrc.get_mytanks()
+            tank = mytanks[i]
+            if tank.status != 'alive':
+                continue
+            self.do_update_beliefs(tank)
+            self.do_move(tank)
         results = self.bzrc.do_commands(self.commands)
 
+    def update_coarse_grid(self):
+        for x in range (0, self.coarse_size - 1):
+            for y in range (0, self.coarse_size -1):
+                average_belief = 0
+                for i in range (0, self.coarse_elements - 1):
+                    bx = random.randint(x * self.worldsize / self.coarse_size, (x + 1) * self.worldsize / self.coarse_size - 1)
+                    by = random.randint(y * self.worldsize / self.coarse_size, (y + 1) * self.worldsize / self.coarse_size - 1)
+                    average_belief += self.belief[bx][by]
+                average_belief /= self.coarse_elements
+                self.coarse_grid[x][y] = average_belief
+
     def do_update_beliefs(self, tank):
+        if tank.status != 'alive':
+            return
+        
         pos, grid = self.bzrc.get_occgrid(tank.index)
         # Apply noise to the grid
         
@@ -192,6 +214,44 @@ class Agent(object):
         delta_x = 0
         delta_y = 0
         
+        # Exploration field
+        exploration_force = 25
+        attractive_multiplier = 0
+        dist = 0
+        angle = 0
+        for x in range (0, self.coarse_size - 1):
+            for y in range (0, self.coarse_size - 1):
+                worldx = (x + 0.5) * self.worldsize / self.coarse_size - 400
+                worldy = (y + 0.5) * self.worldsize / self.coarse_size - 400
+                # Choose the most attractive direction and go there
+                this_dist = math.sqrt((worldx - tank.x)**2 + (worldy - tank.y)**2)
+                this_attractive_multiplier = (1 - abs(self.prior - self.coarse_grid[x][y])) * (-self.worldsize * math.sqrt(2) + this_dist)
+                # idea: be attracted to immediate benefits AND have a long-term destination (distant but large objective)
+                if self.coarse_grid[x][y] < (self.prior / 4):
+                    this_attractive_multiplier = -.5 # Repel previously explored space
+                if self.coarse_grid[x][y] > (self.prior + 1) / 2:
+                    this_attractive_multiplier = -1 # Repel obstacles strongly
+                if attractive_multiplier < 0 and dist > self.worldsize / 8:
+                    delta_x += this_attractive_multiplier * exploration_force * math.cos(angle) * (self.worldsize * 2 - this_dist) / (self.worldsize * 2)
+                    delta_y += this_attractive_multiplier * exploration_force * math.sin(angle) * (self.worldsize * 2 - this_dist) / (self.worldsize * 2)
+                if this_attractive_multiplier > attractive_multiplier:
+                    attractive_multiplier = this_attractive_multiplier
+                    dist = math.sqrt((worldx - tank.x)**2 + (worldy - tank.y)**2)
+                    angle = math.atan2((worldy - tank.y), (worldx - tank.x))
+                
+        delta_x += attractive_multiplier * exploration_force * math.cos(angle) * (self.worldsize * 2 - dist) / (self.worldsize * 2)
+        delta_y += attractive_multiplier * exploration_force * math.sin(angle) * (self.worldsize * 2 - dist) / (self.worldsize * 2)
+        
+        # Repel ally tanks
+        repulsive_force = 50
+        for ally in self.mytanks:
+            dist = math.sqrt((ally.x - tank.x)**2 + (ally.y - tank.y)**2)
+            angle = math.atan2((ally.y - tank.y), (ally.x - tank.x))
+            if dist < self.max_dist_to_obstacle:
+                delta_x += -repulsive_force * (self.max_dist_to_obstacle*2 - dist) * math.cos(angle) / (self.max_dist_to_obstacle*2)
+                delta_y += -repulsive_force * (self.max_dist_to_obstacle*2 - dist) * math.sin(angle) / (self.max_dist_to_obstacle*2)
+        
+        '''
         # Attractive field  
         attractive_force = 25
         goal_found = False
@@ -224,6 +284,7 @@ class Agent(object):
             delta_x += attractive_force * dist * math.cos(angle) / self.max_dist_to_obstacle
             delta_y += attractive_force * dist * math.sin(angle) / self.max_dist_to_obstacle
         print("Attractive force: ", math.sqrt(delta_x**2 + delta_y**2))
+        '''
         '''    
         # Repulsive fields
         repulsive_force = 25
@@ -314,14 +375,18 @@ class Agent(object):
         if abs(speed_error) > 1: # There may be something blocking the tank
             shoot = True
         
-        narrow_angle = math.pi / 2
+        narrow_angle = math.pi / 8
+        min_shoot_dist = 100
         for enemy in self.enemies:
             if enemy.status != 'alive':
                 continue
             dist = math.sqrt((enemy.x - tank.x)**2 + (enemy.y - tank.y)**2)
-            if abs(math.atan2(enemy.x - tank.x, enemy.y - tank.y)) < narrow_angle:
+            if abs(math.atan2(enemy.x - tank.x, enemy.y - tank.y)) < narrow_angle and dist < min_shoot_dist:
                 shoot = True
-        
+
+        #DEBUG: Comment out if you want to test shooting
+        #shoot = False
+
         # to switch to velocity-based tank speed, use only the parameter new_speed.
         # to use an acceleration-based tank speed, use new_speed + tank_speed
         new_angvel = self.normalize_angle(new_angvel)
